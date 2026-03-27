@@ -1073,9 +1073,7 @@ public class MainActivity extends AppCompatActivity {
         try {
             ProcessBuilder processBuilder = new ProcessBuilder("sh");
             processBuilder.redirectErrorStream(true);
-
             Process process = processBuilder.start();
-
             OutputStream os = process.getOutputStream();
             if (command.startsWith("./magick")) {
                 os.write(("cd " + dir + "; export LD_LIBRARY_PATH=" + dir + " ; " + command + "\n").getBytes());

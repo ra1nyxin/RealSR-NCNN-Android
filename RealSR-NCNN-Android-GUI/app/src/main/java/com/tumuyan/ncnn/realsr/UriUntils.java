@@ -2,8 +2,6 @@ package com.tumuyan.ncnn.realsr;
 
 import android.content.ContentUris;
 import android.content.Context;
-import android.content.pm.PackageInfo;
-import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
 import android.database.Cursor;
 import android.net.Uri;
@@ -12,191 +10,110 @@ import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.util.Log;
-
 import androidx.core.content.FileProvider;
-
 import java.io.File;
 import java.lang.reflect.Method;
-import java.util.List;
 
 public class UriUntils {
-
-    public static String getFileName(final Uri uri, Context context) {
-
+    private static final String TAG = "UriUntils";
+    public static String getFileName(Uri uri, Context context) {
+        if (uri == null) return null;
         String path = getPathFromUri(uri, context);
-
-        if (path == null) {
-            String fileName;
-            try {
-                Cursor cursor = context.getContentResolver().query(uri, null, null, null, null);
-                if(cursor !=null) {
-                    int nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-                    cursor.moveToFirst();
-                    fileName = cursor.getString(nameIndex);
-                    cursor.close();
-                    return fileName;
-                }
-
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        } else {
-            Log.w("path is real", "uri-" + uri + "\npath-" + path);
+        if (path != null) {
             return new File(path).getName();
         }
-        return null;
-    }
-
-    //------------------------强无敌并不是真的强无敌--增加了raw---------------------
-
-    public static String getPathFromUri(final Uri uri, Context context) {
-        if (uri == null) {
-            return null;
-        }
-
-        if (DocumentsContract.isDocumentUri(context, uri)) {
-            Log.w("documentUri", "" + uri);
-            // 如果是Android 4.4之後的版本，而且屬於文件URI
-            final String authority = uri.getAuthority();
-            // 判斷Authority是否為本地端檔案所使用的
-            if ("com.android.externalstorage.documents".equals(authority)) {
-                // 外部儲存空間
-                final String docId = DocumentsContract.getDocumentId(uri);
-                final String[] divide = docId.split(":");
-                final String type = divide[0];
-                if ("primary".equals(type)) {
-                    return Environment.getExternalStorageDirectory().getAbsolutePath().concat("/").concat(divide[1]);
-                }
-            } else if ("com.android.providers.downloads.documents".equals(authority)) {
-                // 下載目錄
-                final String docId = DocumentsContract.getDocumentId(uri);
-                if (docId.startsWith("raw:")) {
-                    return docId.replaceFirst("raw:", "");
-                }
-                final Uri downloadUri = ContentUris.withAppendedId(
-                        Uri.parse("content://downloads/public_downloads")
-                        , Long.parseLong(docId.replaceFirst("^(msf):", "")
-                        ));
-                return queryAbsolutePath(context, downloadUri);
-            } else if ("com.android.providers.media.documents".equals(authority)) {
-                // 圖片、影音檔案
-                final String docId = DocumentsContract.getDocumentId(uri);
-                final String[] divide = docId.split(":");
-                final String type = divide[0];
-                Uri mediaUri = null;
-                if ("image".equals(type)) {
-                    mediaUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
-                } else if ("video".equals(type)) {
-                    mediaUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI;
-                } else if ("audio".equals(type)) {
-                    mediaUri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI;
-
-                } else {
-                    return null;
-                }
-                mediaUri = ContentUris.withAppendedId(mediaUri, Long.parseLong(divide[1]));
-                return queryAbsolutePath(context, mediaUri);
-            }
-        } else {
-
-            final String scheme = uri.getScheme();
-            final String Authority = uri.getAuthority();
-            final String uripath = uri.getPath();
-
-            // 如果是一般的URI
-            String path = null;
-            if ("content".equals(scheme)) {
-                // 內容URI
-                path = queryAbsolutePath(context, uri);
-                if (path != null) {
-                    //        } else if (!path.matches("^/storage/")) {
-                } else {//通配content://********.provider/  不一定有效
-                    if (Authority != null && uripath != null) {
-                        if (Authority.length() > 1 && uripath.length() > 1) {
-                            Log.w("fileProvider", "last.");
-                            return getFPUriToPath(uri, context);
-                        }
-                    }
-                }
-            } else if ("file".equals(scheme)) {
-                // 檔案URI
-                path = uri.getPath();
-            }
-            return path;
-        }
-        return null;
-    }
-
-
-    public static String queryAbsolutePath(final Context context, final Uri uri) {
-        final String[] projection = {MediaStore.MediaColumns.DATA};
-        Cursor cursor = null;
-        try {
-            cursor = context.getContentResolver().query(uri, projection, null, null, null);
+        try (Cursor cursor = context.getContentResolver().query(uri, null, null, null, null)) {
             if (cursor != null && cursor.moveToFirst()) {
-                final int index = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA);
+                int index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (index != -1) return cursor.getString(index);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "getFileName failed", e);
+        }
+        return null;
+    }
+
+    public static String getPathFromUri(Uri uri, Context context) {
+        if (uri == null) return null;
+        String path = null;
+        if (DocumentsContract.isDocumentUri(context, uri)) {
+            path = handleDocumentUri(context, uri);
+        } 
+        else if ("content".equalsIgnoreCase(uri.getScheme())) {
+            path = getDataColumn(context, uri, null, null);
+            if (path == null) {
+                path = getPathByReflection(context, uri);
+            }
+        } 
+        else if ("file".equalsIgnoreCase(uri.getScheme())) {
+            path = uri.getPath();
+        }
+        return path;
+    }
+
+    private static String handleDocumentUri(Context context, Uri uri) {
+        final String auth = uri.getAuthority();
+        final String docId = DocumentsContract.getDocumentId(uri);
+        if ("com.android.externalstorage.documents".equals(auth)) {
+            String[] split = docId.split(":");
+            if ("primary".equalsIgnoreCase(split[0])) {
+                return Environment.getExternalStorageDirectory() + "/" + split[1];
+            }
+        } else if ("com.android.providers.downloads.documents".equals(auth)) {
+            if (docId.startsWith("raw:")) return docId.substring(4);            
+            try {
+                String cleanId = docId.replaceAll("^(msf|raw):", "");
+                Uri contentUri = ContentUris.withAppendedId(
+                        Uri.parse("content://downloads/public_downloads"), Long.parseLong(cleanId));
+                return getDataColumn(context, contentUri, null, null);
+            } catch (Exception e) {
+                return null;
+            }
+        } else if ("com.android.providers.media.documents".equals(auth)) {
+            String[] split = docId.split(":");
+            Uri contentUri = null;
+            switch (split[0]) {
+                case "image": contentUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI; break;
+                case "video": contentUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI; break;
+                case "audio": contentUri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI; break;
+            }
+            return getDataColumn(context, contentUri, "_id=?", new String[]{split[1]});
+        }
+        return null;
+    }
+
+    private static String getDataColumn(Context context, Uri uri, String selection, String[] selectionArgs) {
+        final String column = MediaStore.MediaColumns.DATA;
+        try (Cursor cursor = context.getContentResolver().query(uri, new String[]{column}, selection, selectionArgs, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int index = cursor.getColumnIndexOrThrow(column);
                 return cursor.getString(index);
             }
-        } catch (final Exception ex) {
-            ex.printStackTrace();
-            if (cursor != null) {
-                cursor.close();
-            }
+        } catch (Exception e) {
+            Log.w(TAG, "getDataColumn failed for " + uri);
         }
         return null;
     }
 
-
-//---------------从fileProvider获取------
-
-    public static String getFPUriToPath(Uri uri, Context context) {
+    private static String getPathByReflection(Context context, Uri uri) {
         try {
-            List<PackageInfo> packs = context.getPackageManager().getInstalledPackages(PackageManager.GET_PROVIDERS);
-            if (packs != null) {
-                String fileProviderClassName = FileProvider.class.getName();
-                for (PackageInfo pack : packs) {
-                    ProviderInfo[] providers = pack.providers;
-                    if (providers != null) {
-                        for (ProviderInfo provider : providers) {
-                            if (uri.getAuthority().equals(provider.authority)) {
-                                if (provider.name.equalsIgnoreCase(fileProviderClassName)) {
-                                    Log.w("uri-get provider", "" + uri);
-                                    Class<FileProvider> fileProviderClass = FileProvider.class;
-                                    try {
-                                        Method getPathStrategy = fileProviderClass.getDeclaredMethod("getPathStrategy", Context.class, String.class);
-                                        getPathStrategy.setAccessible(true);
-                                        Object invoke = getPathStrategy.invoke(null, context, uri.getAuthority());
-                                        if (invoke != null) {
-                                            String PathStrategyStringClass = FileProvider.class.getName() + "$PathStrategy";
-                                            Class<?> PathStrategy = Class.forName(PathStrategyStringClass);
-                                            Method getFileForUri = PathStrategy.getDeclaredMethod("getFileForUri", Uri.class);
-                                            getFileForUri.setAccessible(true);
-                                            Object invoke1 = getFileForUri.invoke(invoke, uri);
-                                            if (invoke1 instanceof File) {
-                                                String filePath = ((File) invoke1).getAbsolutePath();
-                                                // 避免如下错误: content://com.hzhu.m.fileprovider/haohaozhu/sharemore.png
-                                                //  返回path:            /data/data/com.tumuyan.filemagic/files/haohaozhu/sharemore.png
-                                                Log.w("get-uri-path", filePath);
-                                                if (!filePath.contains("com.tumuyan.filemagic"))
-                                                    //&& !filePath.contains(uri.getAuthority())
-                                                    return filePath;
-                                            }
-                                        }
-                                    } catch (Exception e) {
-                                        e.printStackTrace();
-                                    }
-                                    break;
-                                }
-                                break;
-                            }
-                        }
-                    }
+            ProviderInfo info = context.getPackageManager().resolveContentProvider(uri.getAuthority(), 0);
+            if (info == null) return null;
+            Method getPathStrategy = FileProvider.class.getDeclaredMethod("getPathStrategy", Context.class, String.class);
+            getPathStrategy.setAccessible(true);
+            Object strategy = getPathStrategy.invoke(null, context, uri.getAuthority());
+            if (strategy != null) {
+                Method getFileForUri = strategy.getClass().getDeclaredMethod("getFileForUri", Uri.class);
+                getFileForUri.setAccessible(true);
+                File file = (File) getFileForUri.invoke(strategy, uri);
+                if (file != null) {
+                    String path = file.getAbsolutePath();
+                    if (!path.contains(context.getPackageName())) return path;
                 }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            Log.e(TAG, "Reflection failed", e);
         }
         return null;
     }
-
 }

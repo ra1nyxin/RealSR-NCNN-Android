@@ -1,15 +1,15 @@
-name: Compile RealSR-NCNN-Android-GUI
+name: Auto Build & Release RealSR-NCNN
 
 on:
   push:
-    branches: [main]
-    paths:
-      - 'RealSR-NCNN-Android-GUI/**'
-      - '.github/workflows/android.yml'  
+    branches:
+      - '**'
   workflow_dispatch:
-  
+
+permissions:
+  contents: write
+
 env:
-  # CI_NAME: Custom CI
   ASSETS_URL: https://github.com/tumuyan/RealSR-NCNN-Android/releases/download/1.11.1/assets.zip
   NCNN_URL: https://github.com/Tencent/ncnn/releases/download/20250503/ncnn-20250503-android-vulkan-shared.zip
 
@@ -22,38 +22,54 @@ jobs:
       with:
         fetch-depth: 0
 
+    - name: Generate Random Version Tag
+      id: vars
+      run: |
+        TAG_NAME="v$(date +'%Y%m%d')-$(head /dev/urandom | tr -dc 'a-z0-9' | head -c 6)"
+        echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+        echo "Using dynamic tag: $TAG_NAME"
+
     - name: Download NCNN and Assets
       run: |
-        echo $GITHUB_WORKSPACE
-        pwd
         wget $ASSETS_URL
         wget $NCNN_URL -O ncnn-android-vulkan-shared.zip
         mkdir -p 3rdparty
-        ls
-        unzip  -o  assets.zip -d RealSR-NCNN-Android-GUI/app/src/main/assets
-        unzip  -o  ncnn-android-vulkan-shared.zip -d 3rdparty/ncnn-android-vulkan-shared
-        
+        unzip -o assets.zip -d RealSR-NCNN-Android-GUI/app/src/main/assets
+        unzip -o ncnn-android-vulkan-shared.zip -d 3rdparty/ncnn-android-vulkan-shared
 
     - name: Setup Java
-      uses: actions/setup-java@v3
+      uses: actions/setup-java@v4
       with:
         distribution: "temurin"
         java-version: 17
         cache: 'gradle'
 
-
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
 
-
     - name: Build Gui
       run: |
-        cd RealSR-NCNN-Android-GUI && chmod +x gradlew && ./gradlew assembleDebug
+        cd RealSR-NCNN-Android-GUI
+        chmod +x gradlew
+        ./gradlew assembleDebug
 
-    - name: Upload Apk artifact
-      uses: actions/upload-artifact@v4
+    - name: Prepare Release Files
+      run: |
+        mkdir -p release_assets
+        cp RealSR-NCNN-Android-GUI/app/build/outputs/apk/debug/*.apk release_assets/RealSR-NCNN-Debug-${{ steps.vars.outputs.tag }}.apk
+
+    - name: Create Release and Upload
+      uses: softprops/action-gh-release@v2
       with:
-        name: RealSR-NCNN-Android-GUI.zip
-        path: RealSR-NCNN-Android-GUI/app/build/outputs/apk/**/*.apk
-        # keep 90 days
-        retention-days: 90
+        tag_name: ${{ steps.vars.outputs.tag }}
+        name: "Auto Build ${{ steps.vars.outputs.tag }}"
+        body: |
+          Automated Build for RealSR-NCNN-Android.
+          Branch: `${{ github.ref_name }}`
+          Commit: `${{ github.sha }}`
+          Build ID: `${{ github.run_id }}`
+        files: release_assets/*.apk
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1251,67 +1251,84 @@ public class MainActivity extends AppCompatActivity {
             processingService.startTask(executionCmd, dir, notify, new ImageProcessor.ProcessCallback() {
                 @Override
                 public void onProgress(String line) {
+                    if (line == null) return;
                     boolean p = run_ncnn && line.matches("\\s*\\d([0-9.]*)%(\\s.+)?");
-                    String progressText = line.trim().split("\\s")[0];
+                    String progressText = "";
+                    
+                    try {
+                        String[] split = line.trim().split("\\s");
+                        if (split.length > 0) progressText = split[0];
+                    } catch (Exception ignored) {}
 
                     if (!p) {
                         logBuilder.append(line).append("\n");
                     }
 
-                    final String textToDisplay = logBuilder.toString() + (p ? line : "");
+                    final String currentLine = line;
+                    final String currentProgress = progressText;
+                    final String fullLog = logBuilder.toString() + (p ? line : "");
 
                     runOnUiThread(() -> {
-                        logTextView.setText(textToDisplay);
-                        if (p) {
-                            menuProgress.setTitle(progressText);
-                            // Notification is handled by Service now
+                        logTextView.setText(fullLog);
+                        if (p && !currentProgress.isEmpty()) {
+                            menuProgress.setTitle(currentProgress);
                         }
                     });
                 }
 
                 @Override
                 public void onCompleted(String result, boolean success) {
-                    String logResult;
-                    if (!success)
-                        logResult = "\nfail, use " + (float) (System.currentTimeMillis() - timeStart) / 1000
-                                + " second";
-                    else
-                        logResult = "\nfinish, use " + (float) (System.currentTimeMillis() - timeStart) / 1000
-                                + " second";
-
-                    if (bench_mark_mode) {
-                        logResult += String.format(", Benchmark run on %s\n%s",
-                                DeviceInfo.getConfigStr(useCPU, tileSize), DeviceInfo.getInfo(MainActivity.this));
-                    } else if (run_ncnn) {
-                        logResult += ", " + modelName + "\n";
+                    final long duration = (System.currentTimeMillis() - timeStart) / 1000;
+                    StringBuilder statusLabel = new StringBuilder();
+                    
+                    if (success) {
+                        statusLabel.append("\n[STATUS: FINISHED] Time: ").append(duration).append("s");
+                    } else {
+                        String errorCode = "E_UNKNOWN_FAIL";
+                        if (result != null) {
+                            if (result.contains("Permission denied")) errorCode = "E_IO_PERMISSION";
+                            else if (result.contains("not found")) errorCode = "E_BINARY_MISSING";
+                            else if (result.contains("Vulkan")) errorCode = "E_VULKAN_DRIVER";
+                            else if (result.contains("out of memory")) errorCode = "E_OOM";
+                        }
+                        statusLabel.append("\n[STATUS: FAILED] Code: ").append(errorCode)
+                                   .append("\nDuration: ").append(duration).append("s");
                     }
 
-                    String finalLog = logBuilder.toString() + logResult;
+                    statusLabel.append("\n").append(getString(R.string.hr))
+                               .append("\nConfig: ").append(DeviceInfo.getConfigStr(useCPU, tileSize))
+                               .append("\nEnv: ").append(DeviceInfo.getInfo(MainActivity.this));
+
+                    if (run_ncnn && !bench_mark_mode) {
+                        statusLabel.append("\nModel: ").append(modelName);
+                    }
+
+                    final String finalLog = logBuilder.toString() + statusLabel.toString();
                     log = finalLog;
 
                     runOnUiThread(() -> {
                         logTextView.setText(finalLog);
-                        menuProgress.setTitle(DONE);
-                        // Result notification still handled here
-                        // If failed (!success) and notify==3 (AutoDismiss), we force show notification.
+                        menuProgress.setTitle(success ? DONE : ERR);
+                        
                         boolean forceShow = !success && notify == 3;
                         sendNotification(MainActivity.this, success ? DONE : ERR, forceShow);
 
-                        if (save) {
-                            if (!outputFile.exists()) {
-                                Toast.makeText(getApplicationContext(), R.string.output_not_exits, Toast.LENGTH_SHORT)
-                                        .show();
-                            } else {
-                                checkSaveOutput();
+                        if (success) {
+                            if (save) {
+                                if (!outputFile.exists()) {
+                                    Toast.makeText(getApplicationContext(), R.string.output_not_exits, Toast.LENGTH_SHORT).show();
+                                } else {
+                                    checkSaveOutput();
+                                }
+                            } else if (final_export_dir) {
+                                Toast.makeText(getApplicationContext(), R.string.save_succeed, Toast.LENGTH_SHORT).show();
                             }
-                        } else if (final_export_dir) {
-                            Toast.makeText(getApplicationContext(), R.string.save_succeed, Toast.LENGTH_SHORT).show();
                         }
 
                         if (inputFile.isDirectory()) {
-                            if (inputIsGifAnimation)
+                            if (inputIsGifAnimation) {
                                 scanFiles(new String[] { outputSavePath });
-                            else {
+                            } else {
                                 File[] files = inputFile.listFiles();
                                 if (files != null) {
                                     List<String> outputPaths = new ArrayList<>();
@@ -1326,32 +1343,33 @@ public class MainActivity extends AppCompatActivity {
                         boolean showImgView = (effectivelyFinalCmd.contains("output.png"));
                         if (showImgView) {
                             if (outputFile.exists() && outputFile.isFile()) {
-                                updateImage(dir + "/output.png", String.format("%s\n%s", getString(R.string.hr), log),
-                                        false);
-                            } else if (inputIsGifAnimation && outputFile.exists() && outputFile.isDirectory()
-                                    && outputFile.listFiles().length > 1) {
-                                updateImage(outputFile.listFiles()[0].getPath(),
-                                        String.format("%s\n%s", getString(R.string.hr), log), false);
+                                updateImage(dir + "/output.png", String.format("%s\n%s", getString(R.string.hr), log), false);
+                            } else if (inputIsGifAnimation && outputFile.exists() && outputFile.isDirectory() 
+                                    && outputFile.listFiles() != null && outputFile.listFiles().length > 0) {
+                                updateImage(outputFile.listFiles()[0].getPath(), String.format("%s\n%s", getString(R.string.hr), log), false);
                             } else {
-                                updateImage(dir + "/input.png", String.format("%s\n%s", getString(R.string.lr), log),
-                                        false);
+                                updateImage(dir + "/input.png", String.format("%s\n%s", getString(R.string.lr), log), false);
                             }
-                        }
-                        if (!showImgView)
+                        } else {
                             imageView.setVisibility(View.GONE);
+                        }
                     });
                 }
 
                 @Override
                 public void onError(String error) {
+                    final String envInfo = DeviceInfo.getInfo(MainActivity.this);
                     runOnUiThread(() -> {
-                        logTextView.append("\nError: " + error);
+                        logTextView.append("\n\nERROR!");
+                        logTextView.append("\nMessage: " + error);
+                        logTextView.append("\nHardware: " + envInfo);
                         sendNotification(MainActivity.this, ERR, true);
                     });
                 }
             });
         } else {
-            Toast.makeText(this, "Service not bound", Toast.LENGTH_SHORT).show();
+            String serviceStatus = (processingService == null) ? "NULL_INSTANCE" : "NOT_BOUND";
+            Toast.makeText(this, "Service Error: " + serviceStatus, Toast.LENGTH_LONG).show();
             return false;
         }
 

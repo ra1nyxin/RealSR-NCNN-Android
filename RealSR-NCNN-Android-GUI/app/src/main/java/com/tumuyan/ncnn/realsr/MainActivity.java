@@ -993,53 +993,70 @@ public class MainActivity extends AppCompatActivity {
         super.onActivityResult(requestCode, resultCode, data);
     }
 
-    // 在主进程执行命令但是不刷新UI，也不被打断
     public int get_gif_frame_delay(@NonNull String path) {
-
         StringBuilder con = new StringBuilder();
-        String result;
-
+        
         try {
             ProcessBuilder processBuilder = new ProcessBuilder("sh");
             processBuilder.redirectErrorStream(true);
             Process process = processBuilder.start();
 
-            OutputStream os = process.getOutputStream();
-            String cmd = "cd " + dir + "; export LD_LIBRARY_PATH=" + dir + " ; "
-                    + "./magick  identify  -format  \"%T \" " + path + " ";
-            os.write((cmd + "\n").getBytes());
-            os.write("exit\n".getBytes());
-            os.flush();
-            os.close();
-
-            BufferedReader br = new BufferedReader(new InputStreamReader(process.getInputStream()));
-            while ((result = br.readLine()) != null) {
-                con.append(result);
-                con.append('\n');
+            try (OutputStream os = process.getOutputStream()) {
+                String cmd = "cd " + dir + "; export LD_LIBRARY_PATH=" + dir + " ; "
+                        + "./magick identify -format \"%T \" " + path + " ";
+                os.write((cmd + "\n").getBytes());
+                os.write("exit\n".getBytes());
+                os.flush();
             }
-            process.waitFor();
+
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String result;
+                while ((result = br.readLine()) != null) {
+                    con.append(result).append('\n');
+                }
+            }
+
+            int exitCode = process.waitFor();
+            if (exitCode != 0) {
+                Log.w("get_gif_frame_delay", "Magick process exited with code: " + exitCode);
+            }
 
         } catch (Exception e) {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
-
-            Log.d("get_gif_frame_delay()", "crash; result=" + con);
+            Log.e("get_gif_frame_delay", "Critical error executing magick. Path: " + path + "; Output: " + con, e);
             return -1;
         }
 
-        String[] data = con.toString().strip().split("\\s+");
-        if (data.length < 2)
+        String output = con.toString().trim();
+        if (output.isEmpty()) {
+            Log.d("get_gif_frame_delay", "Finish; No data received from identify.");
             return 0;
-
-        int avg = Integer.parseInt(data[1]);
-        int dif = 0;
-        for (String s : data) {
-            dif += (Integer.parseInt(s) - avg);
         }
-        avg = avg + dif / data.length;
 
-        Log.d("get_gif_frame_delay()", "finish; result=" + con);
-        return avg;
+        String[] data = output.split("\\s+");
+        
+        try {
+            if (data.length < 2) {
+                return Integer.parseInt(data[0]);
+            }
+
+            long totalDelay = 0;
+            int validCount = 0;
+            
+            for (String s : data) {
+                if (!s.isEmpty()) {
+                    totalDelay += Integer.parseInt(s);
+                    validCount++;
+                }
+            }
+
+            int avg = (validCount > 0) ? (int) (totalDelay / validCount) : 0;            
+            Log.d("get_gif_frame_delay", "Finish; Result=" + avg + "; Total frames=" + validCount);
+            return avg;
+
+        } catch (NumberFormatException e) {
+            Log.e("get_gif_frame_delay", "Failed to parse delay values: " + output, e);
+            return 0;
+        }
     }
 
     // 在主进程执行命令但是不刷新UI，也不被打断
